@@ -1,0 +1,399 @@
+#!/bin/bash
+
+if [[ $(whoami) != 'root' ]];then
+	echo "У вас нет прав для запуска $0"
+	exit 1
+fi
+
+Program_Dir=$HOME/Programs/Linux/sh/autovpn-sh
+cd $Program_Dir
+
+source ./vpn_gate/var/Demon_var.txt
+source ./vpn_gate/var/var.sh
+
+if [ $# -lt 1 ]; then
+        echo "Команд не найдена!"
+        exit 1
+fi
+
+checkargs() {
+if [[ $OPTARG =~ ^-[a-zA-Z]$ ]]
+        then
+        echo "Неизвестный аргумент $OPTARG для опции $opt!"
+        exit 1
+        fi
+}
+
+while getopts "i:I:d:t:p:P:anfcue" opt
+do
+	case $opt in
+		i ) checkargs ; iso=$OPTARG
+		;;
+		I ) checkargs ; ip=$OPTARG
+		;;
+                d ) checkargs ; Start_Demon=1 ; orgd=$OPTARG
+                ;;
+		t ) checkargs ; time=$OPTARG
+		;;
+                p ) checkargs ; Program_Name=$OPTARG
+                ;;
+		P ) checkargs ; ip netns exec vpn $OPTARG ; exit
+		;;
+		a ) Auto_Start=1
+		;;
+		n ) No_Start=1
+		;;
+		f ) Start_File=1
+		;;
+		c ) Start_Clean=1
+		;;
+		u ) Start_Update=1
+		;;
+		e ) Echo_Info=1
+		;;
+   		* ) echo "Неправильная команда" ; exit 1
+		;;
+  	esac
+done
+
+function Download_Conf {
+	if [[ ! -e $Vpn_Config_File ]]; then
+		echo "Скачивается файл конфигурации Vpn"
+        	curl -s $vgate > $Vpn_Config_File
+	fi
+}
+
+function Extract_Header {
+	if [[ ! -e $Header_File ]]; then
+        	echo "Извлечение заголовков"
+        	cat $Vpn_Config_File | sed 's/Iy.*//' > $Header_File
+	fi
+}
+
+function Update_Conf {
+	echo "Обновление файла конфигурации Vpn"
+	curl -s $vgate > $Vpn_Config_File
+	sleep 1
+	echo "Извлечение заголовков"
+	cat $Vpn_Config_File | sed 's/Iy.*//' > $Header_File
+	sleep 1
+	exit
+}
+
+function Extract_Iso {
+	all_iso=$(cut -f7 -d "," $Header_File | sed -e '/^\*/d ; /CountryShort/d ; /vpn_servers/d')
+	all_iso=($( sort -u <<< "${all_iso[@]}" ))
+	all_iso_sum=${#all_iso[@]}
+}
+
+function No_Ip {
+	function Extract_Ip {
+		Ip_File=$Ip_Dir/$iso.txt
+		grep "\,$iso\," $Header_File | grep -E -o "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)" > $Ip_File
+		ip=($(cat $Ip_File))
+		ip_sum=${#ip[@]}
+	}
+
+
+	Extract_Ip
+
+	if [[ $ip_sum == 0 ]]; then
+		echo "Kод страны не найден"
+		rm $Ip_Dir/$iso.txt
+		exit 1
+	fi
+
+	if [[ $Auto_Start == 0 ]]; then
+		echo "Код страны: $iso"
+		sleep 1
+
+		for ((a=0; a < $ip_sum ; a++))
+		do
+			echo "IP: ${ip[$a]} ($a)"
+		done
+
+		echo -n "Выберите IP (n): "
+		read ip_num
+
+		if [ "$ip_num" \< "$ip_sum" ] ; then
+			sleep 1
+                        ip="${ip[$ip_num]}"
+			echo " "
+			echo "Выброный IP ($ip)"
+			Vpn_File_Name=$Ovpn_Dir/vpn_$iso\_$ip\_.ovpn
+			Start_Vpn
+		else
+			echo "Error: IP не найден"
+			exit 1
+		fi
+	else
+		#Error $random_ip %= 0(ip_sum)
+		#ip_sum=$(( --ip_sum ))
+		random_ip=$RANDOM
+		let "random_ip %= $ip_sum"
+		ip="${ip[$random_ip]}"
+		sleep 1
+		echo "Выброный IP ($ip)"
+		Vpn_File_Name=$Ovpn_Dir/vpn_$iso\_$ip\_.ovpn
+		Start_Vpn
+	fi
+	rm $Ip_Dir/*
+}
+
+function Start_Vpn {
+	sleep 1
+        echo "Создание Файла Конфигурации"
+        grep "$ip" $Vpn_Config_File | sed 's/.*,//' | base64 -i -d > $Vpn_File_Name
+
+	grep "update-resolv-conf" $Vpn_File_Name 2>&1 > /dev/null
+	if [[ "$?" != 0 && "$No_Start" == 0 ]]; then
+		sed -i '105i script-security 2\nup /etc/openvpn/update-resolv-conf\ndown /etc/openvpn/update-resolv-conf\n' $Vpn_File_Name
+	fi
+
+    	if [[ "$No_Start" == 1 ]]; then
+		echo "OK"
+		sed -i -e "105i script-security 2\nup $Program_Dir/scripts/netns_control.sh\ndown $Program_Dir/scripts/netns_control.sh" $Vpn_File_Name
+
+		New_Vpn_File_Name=$Ovpn_Dir/vpn_$iso\_$ip\_netns.ovpn
+		mv $Vpn_File_Name $New_Vpn_File_Name
+		Vpn_File_Name=$New_Vpn_File_Name
+		User_uid=$(grep "$User" /etc/passwd | cut -f3 -d ":")
+		if [[ "$User_uid" -ge 0 && "$U" == 0 ]]; then
+			echo -n "Имя пользователя[root]: "
+                	read New_User
+
+			sed -i 's/U=.*/U=1/' $Var_Dir/var.sh
+			if [[ ! -e "$New_User" ]]; then
+				User=$New_User
+				sed -i -e "s/User=.*/User=$New_User/" $Var_Dir/var.sh
+			fi
+		fi
+
+		[ ! -d /etc/netns/vpn ] && mkdir -p /etc/netns/vpn/
+		echo "Настройка netns"
+		$Script_Dir/start_netns.sh start
+		sleep 3
+		echo "Запуск vpn"
+		ip netns exec vpn openvpn --daemon --log $Log_File --config $Vpn_File_Name
+		if [[ -n "$Program_Name" ]]; then
+			sleep 10
+			ip netns exec vpn "$Program_Name"
+		fi
+	else
+		sleep 1
+		echo "Запуск vpn"
+        	screen -dmS vpn openvpn $Vpn_File_Name
+	fi
+}
+
+function Start_Vpn_File {
+
+	Existing_Vpn=($(ls $Ovpn_Dir/ ))
+        Existing_Vpn_sum=${#Existing_Vpn[@]}
+
+	if [[ $Existing_Vpn_sum == 0 ]]; then
+		echo "Файлов конфигурации не найдено"
+		exit 1
+	fi
+
+        for (( i=0; i < $Existing_Vpn_sum ; i++ ))
+        do
+        	echo "Vpn: ${Existing_Vpn[$i]} ($i)"
+	done
+
+        echo ""
+	echo -n "Bыберите vpn: "
+        read vpn_num
+
+	file_iso=$(echo "${Existing_Vpn[$vpn_num]}" | sed -e 's/vpn_// ; s/_.*$//')
+	file_ip=$(echo "${Existing_Vpn[$vpn_num]}" | sed -e 's/vpn_[A-Z]..// ; s/_.*$//')
+	iso=$file_iso
+	ip=$file_ip
+
+	if [ $vpn_num -lt $Existing_Vpn_sum ]; then
+        	echo "Запуск ${Existing_Vpn[$vpn_num]}"
+               	screen -dmS vpn openvpn $Ovpn_Dir/${Existing_Vpn[$vpn_num]}
+        else
+                echo "Ошибка: Файл не найден"
+               	exit 1
+	fi
+}
+function Restart_Vpn {
+	sleep 14
+	myip=$(curl -s -4 ifconfig.co)
+
+	if [[ -z "$myip" ]];then
+		echo "Error myip"
+		echo "myip=$myip"
+		exit 1;
+	fi
+
+	if [[ "$myip" != "$ip" ]]; then
+		pid_vpn=($(pgrep openvpn))
+		pid_vpn_sum=${#pid_vpn[@]}
+		counter=$(( $counter + 1 ))
+
+		if [[ "$pid_vpn_sum" != 0 ]]; then
+
+			for (( pid=0 ; pid < $pid_vpn_sum ; pid++ ))
+			do
+				kill -INT "${pid_vpn[$pid]}"
+			done
+
+			echo ""
+        		echo "Смена vpn конфигурации"
+
+			if [[ $counter == 2 ]]; then
+				counter=0
+				Extract_Iso
+
+				random_iso=$RANDOM
+        			all_iso_sum=$(( $all_iso_sum - 1 ))
+        			let "random_iso %= $all_iso_sum"
+
+        			iso="${all_iso[$random_iso]}"
+
+				echo "Kод страны изменен: $iso"
+			fi
+
+			Auto_Start=1
+        		No_Ip
+		else
+			exit 1
+		fi
+	else
+		exit
+	fi
+	Restart_Vpn
+}
+
+function Cleane_Files {
+	ovpn_files=($( ls $Ovpn_Dir/ ))
+	ovpn_sum=${#ovpn_files[@]}
+
+	if [[ $ovpn_sum -ge 1 ]]; then
+		ovpn_sum=$(( $ovpn_sum -1 ))
+		for (( rv=0 ; rv <= $ovpn_sum ; ++rv ))
+		do
+			echo "Remove ${ovpn_files[$rv]}"
+			sleep 1
+			rm $Ovpn_Dir/"${ovpn_files[$rv]}"
+		done
+	else
+		echo "File Not Found"
+		exit 1
+	fi
+exit
+}
+
+function Vpn_Info {
+	ov_pid=$(pgrep openvpn)
+	#if [[ ! -z "$ov_pid" ]]; then
+		curl -s ifconfig.co/json | sed 's/.*{//; s/,/\n/g ; s/.$/\n/; s/"//g'  > $Info_Vpn_File
+		HError=($(grep -o "429"  $Info_Vpn_File))
+
+		if [[ "$HError" == 429 ]]; then
+			echo "Превышен лимит запросов к серверу ifconfig.co"
+			exit 1
+		fi
+
+		info_ip=$(grep "ip:" $Info_Vpn_File | sed 's/^.*://')
+		info_decimal=$(grep "ip_" $Info_Vpn_File | sed 's/^.*://')
+		info_city=$(grep "^city" $Info_Vpn_File | sed 's/^.*://')
+		info_country=$(grep "^count" $Info_Vpn_File | sed 's/^.*://')
+		info_host=$(grep "^host" $Info_Vpn_File | sed 's/^.*://')
+
+		echo "##############################################################"
+		echo "#### Ip: $info_ip"
+		echo "#### IP_Decimal: $info_decimal"
+		echo "#### City: $info_city"
+		echo "#### Country: $info_country"
+		echo "#### HostName: $info_host"
+		echo "##############################################################"
+	#else
+		#echo "Не найдено vpn соединений"
+		#exit 1;
+	#fi
+exit
+}
+
+function Demon {
+	Demon_pid=($(pgrep demon.sh ))
+	Demon_pid_sum=${#Demon_pid[@]}
+
+        if [[ "$1" == "START" ]]; then
+                if [[ -z "$2" ]]; then
+                        echo "Время не указано используйте ключ -t"
+                        exit 1;
+                fi
+
+                if [[ "$Demon_pid_sum" == 0 ]]; then
+                        echo "Start Demon time $2"
+                        cd vpn_gate
+                        setsid ./demon.sh $2  2>&1 < /dev/null &
+                        cd - > /dev/null
+                else
+                        echo "Демон уже запущен"
+                fi
+        fi
+
+	if [[ "$1" == "STOP" ]]; then
+		if [[ "$Demon_pid_sum" != 0 ]]; then
+			echo "Stop Demon"
+			kill -SIGHUP ${Demon_pid[0]}
+		else
+			echo "Демон не запущен"
+		fi
+	fi
+
+	if [[ "$1" == "STATUS" ]]; then
+		echo -n "Status of Demon: "
+		if [[ "$Demon_pid_sum" == 0 ]]; then
+			echo "disabled"
+		else
+			echo "enabled"
+		fi
+		echo "PID: ${Demon_pid[0]}"
+	fi
+exit
+}
+
+Download_Conf
+sleep 1
+Extract_Header
+
+if [[ "$WORK" == 1 ]]; then
+	echo "Файлы конфигурации обновляются"
+	exit 1
+fi
+
+if [[ "$Start_Demon" == 1 ]]; then
+	Demon $orgd $time
+fi
+
+if [[ "$Start_Update" == 1 ]]; then
+	Update_Conf
+fi
+
+if [[ "$Echo_Info" == 1 ]]; then
+	Vpn_Info
+fi
+
+if [[ "$Start_Clean" == 1 ]]; then
+	Cleane_Files
+fi
+
+if [[ "$Start_File" == 1 ]]; then
+	Start_Vpn_File
+else if [[ "$ip" == "" ]]; then
+	No_Ip
+     else
+	Start_Vpn
+     fi
+fi
+
+if [[ "$No_Start" == 0 ]]; then
+	Restart_Vpn
+fi
+
+exit

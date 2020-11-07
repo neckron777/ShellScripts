@@ -1,0 +1,31 @@
+#!/bin/bash
+
+VBOX=$(which VBoxManage)
+
+if [[ $1 == "-s" ]] ; then
+	if [[ -n $3 ]] ; then
+                $VBOX startvm "$2" --type $3
+		exit
+        fi
+
+	$VBOX startvm "$2"
+fi
+if [[ $1 == "-l" ]] ; then
+	if [[ -n $2 ]] ; then
+		$VBOX list $2
+		exit
+	fi
+
+	$VBOX list runningvms
+fi
+
+help() {
+	echo "################################"
+	echo ""
+	echo "################################"
+}
+
+
+[[ $1 == "-p" ]] && $VBOX controlvm $2 poweroff
+[[ $1 == "-a" ]] && $VBOX controlvm $2 acpipowerbutton
+[[ $1 == "--help" || $1 == "-h" ]] && help

@@ -1,0 +1,12 @@
+#sed '/verb 3/a mssfix 0'
+#sed 's/Iy.*//' files/vpn_gate/vpn_conf.txt
+#sed 's/.*,//' files/vpn_gate/vpn_conf.txt
+
+#grep "proto" | sed '/^#/d' | sed 's/.* //'
+#sed 's/^proto tcp/proto udp/'
+
+#curl -s http://www.vpnbook.com/ | grep " Euro2:" | awk '{gsub("\t","");print}'
+
+sed -e 's/^as.*//;s/^region .*//;s/^zip.*//;/^$/d' ip_api.txt 
+
+remote-cert-tls server

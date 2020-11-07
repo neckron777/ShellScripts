@@ -1,0 +1,9 @@
+#!/bin/bash
+USER="$1"
+
+if ! cat /etc/passwd | cut -d: -f1 | grep $USER > /dev/null
+then
+      echo "$USER не существует."
+else
+      echo "$USER существует."
+fi
